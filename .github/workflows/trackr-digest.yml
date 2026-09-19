@@ -2,7 +2,7 @@ name: Trackr Digest
 
 on:
   schedule:
-    - cron: "0 19 * * 2,5"
+    - cron: "0 19 * * 2,5,6"
   workflow_dispatch:
 
 jobs:
