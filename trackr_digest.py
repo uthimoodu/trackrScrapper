@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Email a daily digest of recently opened Trackr spring week programmes."""
+"""Email a daily digest of recently opened Trackr spring weeks and events."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ from urllib.request import Request, urlopen
 
 TRACKR_API_URL = "https://api.the-trackr.com/programmes"
 TRACKR_URL = "https://app.the-trackr.com/uk-finance/spring-weeks"
+TRACKR_EVENTS_URL = "https://app.the-trackr.com/uk-finance/events"
+PROGRAMME_LABELS = {"spring-weeks": "Spring Week", "events": "Event"}
 DATE_DISPLAY_FORMAT = "%d %b %Y"
 
 
@@ -41,6 +43,8 @@ class Programme:
     written_answers: str | None
     sponsors_visa: str | None
     notes: str | None
+    programme_type: str = "spring-weeks"
+    event_date: str | None = None
 
 
 def load_dotenv(path: Path) -> None:
@@ -168,6 +172,8 @@ def normalize_programme(raw: dict[str, Any], *, fallback_url: str) -> Programme 
         written_answers=raw.get("writtenAnswers"),
         sponsors_visa=company.get("sponsorsVisa") or raw.get("sponsorsVisa"),
         notes=raw.get("notes"),
+        programme_type=str(raw.get("type") or urlparse(fallback_url).path.rstrip("/").split("/")[-1]),
+        event_date=raw.get("eventDate"),
     )
 
 
@@ -198,10 +204,10 @@ def filter_recent_openings(
 
 def plain_text_digest(programmes: list[Programme], *, lookback_days: int, today: date) -> str:
     lines = [
-        f"Trackr Spring Weeks Digest - {today.strftime(DATE_DISPLAY_FORMAT)}",
+        f"Trackr Spring Weeks & Events Digest - {today.strftime(DATE_DISPLAY_FORMAT)}",
         "",
         f"{len(programmes)} programme(s) opened in the last {lookback_days} days.",
-        "Events are filtered by opening date only; a past closing date does not remove them.",
+        "Entries are filtered by opening date only; a past closing date does not remove them.",
         "",
     ]
 
@@ -212,6 +218,7 @@ def plain_text_digest(programmes: list[Programme], *, lookback_days: int, today:
         lines.extend(
             [
                 f"- {programme.company}: {programme.name}",
+                f"  Type: {PROGRAMME_LABELS.get(programme.programme_type, programme.programme_type)}",
                 f"  Opening date: {format_date(programme.opening_date)}",
                 f"  Closing date: {format_date(programme.closing_date)}{closed_marker}",
                 f"  Categories: {', '.join(programme.categories) or '-'}",
@@ -223,6 +230,8 @@ def plain_text_digest(programmes: list[Programme], *, lookback_days: int, today:
                 f"  Link: {programme.url}",
             ]
         )
+        if programme.event_date:
+            lines.append(f"  Event date: {programme.event_date}")
         if programme.notes:
             lines.append(f"  Notes: {programme.notes}")
         lines.append("")
@@ -242,6 +251,8 @@ def html_digest(programmes: list[Programme], *, lookback_days: int, today: date,
             "<tr>"
             f"<td>{html.escape(programme.company)}</td>"
             f"<td><a href=\"{html.escape(link)}\">{html.escape(programme.name)}</a></td>"
+            f"<td>{html.escape(PROGRAMME_LABELS.get(programme.programme_type, programme.programme_type))}</td>"
+            f"<td>{html.escape(programme.event_date or '-')}</td>"
             f"<td>{html.escape(format_date(programme.opening_date))}</td>"
             f"<td>{html.escape(closing)}</td>"
             f"<td>{html.escape(', '.join(programme.categories) or '-')}</td>"
@@ -254,14 +265,16 @@ def html_digest(programmes: list[Programme], *, lookback_days: int, today: date,
 <!doctype html>
 <html>
   <body>
-    <h2>Trackr Spring Weeks Digest - {html.escape(today.strftime(DATE_DISPLAY_FORMAT))}</h2>
+    <h2>Trackr Spring Weeks &amp; Events Digest - {html.escape(today.strftime(DATE_DISPLAY_FORMAT))}</h2>
     <p>{len(programmes)} programme(s) opened in the last {lookback_days} days.</p>
-    <p>Filtered by opening date only; a past closing date does not remove an event.</p>
+    <p>Filtered by opening date only; a past closing date does not remove an entry.</p>
     <table border="1" cellpadding="6" cellspacing="0">
       <thead>
         <tr>
           <th>Company</th>
           <th>Programme</th>
+          <th>Type</th>
+          <th>Event date</th>
           <th>Opening</th>
           <th>Closing</th>
           <th>Categories</th>
@@ -274,6 +287,7 @@ def html_digest(programmes: list[Programme], *, lookback_days: int, today: date,
       </tbody>
     </table>
     <p><a href="{html.escape(trackr_url)}">Open Trackr Spring Weeks</a></p>
+    <p><a href="{html.escape(TRACKR_EVENTS_URL)}">Open Trackr Events</a></p>
   </body>
 </html>
 """
@@ -317,7 +331,7 @@ def send_email(programmes: list[Programme], *, lookback_days: int, today: date, 
         raise RuntimeError("EMAIL_TO must contain at least one recipient address.")
 
     message = EmailMessage()
-    message["Subject"] = f"Trackr Spring Weeks: {len(programmes)} opening(s)"
+    message["Subject"] = f"Trackr Spring Weeks & Events: {len(programmes)} opening(s)"
     message["From"] = formataddr((sender_name, sender))
     message["To"] = ", ".join(recipients)
     message.set_content(plain_text_digest(programmes, lookback_days=lookback_days, today=today))
@@ -345,7 +359,7 @@ def send_email(programmes: list[Programme], *, lookback_days: int, today: date, 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Send a Trackr spring weeks daily digest.")
+    parser = argparse.ArgumentParser(description="Send a Trackr spring weeks and events daily digest.")
     parser.add_argument("--dry-run", action="store_true", help="Print the digest instead of sending email.")
     parser.add_argument(
         "--lookback-days",
@@ -356,7 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--trackr-url",
         default=os.getenv("TRACKR_URL", TRACKR_URL),
-        help="Exact Trackr Spring Weeks URL to monitor.",
+        help="Exact Trackr Spring Weeks URL to monitor. UK Finance events are also included.",
     )
     parser.add_argument("--season", default=os.getenv("TRACKR_SEASON", "2027"))
     parser.add_argument(
@@ -380,23 +394,29 @@ def main() -> int:
     industry = url_industry or "Finance"
     programme_type = url_type or "spring-weeks"
 
-    raw_programmes = fetch_programmes(
-        region=region,
-        industry=industry,
-        season=args.season,
-        programme_type=programme_type,
-        timeout_seconds=args.timeout_seconds,
-    )
-    recent_programmes = filter_recent_openings(
-        raw_programmes,
-        today=today,
-        lookback_days=args.lookback_days,
-        programme_type=programme_type,
-        fallback_url=args.trackr_url,
-    )
+    recent_programmes = []
+    for current_type, fallback_url in (
+        (programme_type, args.trackr_url),
+        ("events", TRACKR_EVENTS_URL),
+    ):
+        raw_programmes = fetch_programmes(
+            region=region,
+            industry=industry,
+            season=args.season,
+            programme_type=current_type,
+            timeout_seconds=args.timeout_seconds,
+        )
+        recent_programmes.extend(filter_recent_openings(
+            raw_programmes,
+            today=today,
+            lookback_days=args.lookback_days,
+            programme_type=current_type,
+            fallback_url=fallback_url,
+        ))
+    recent_programmes.sort(key=lambda item: (item.opening_date, item.company, item.name), reverse=True)
 
     if not recent_programmes:
-        print("No Trackr spring week openings in the lookback window to email.")
+        print("No Trackr spring week or event openings in the lookback window to email.")
         return 0
 
     if args.dry_run:
